@@ -1,0 +1,262 @@
+// Lumora — Cambridge Primary Adaptive Learning
+// Data model per dokumen konsep, Bagian 18:
+// Subject → Stage → Strand → Learning Objective → Skill → Activity → Question
+// + learning_sessions, attempts, mastery, recommendations, achievements,
+//   teacher_insights, parent_insights
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  STUDENT
+  TEACHER
+  PARENT
+  ADMIN
+}
+
+enum ActivityType {
+  LESSON
+  PRACTICE
+  REINFORCEMENT
+  ADVANCE
+}
+
+enum RecommendationMode {
+  REINFORCE
+  PRACTICE
+  ADVANCE
+}
+
+enum AchievementType {
+  BADGE
+  STREAK
+  XP
+}
+
+// --- Identitas & Peran (Bagian 6, 18) ---
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  role         Role
+  name         String
+  createdAt    DateTime @default(now())
+
+  student Student?
+  teacher Teacher?
+  parent  ParentProfile?
+}
+
+model Student {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id])
+  name      String
+  stage     Int // 1-3 untuk MVP (Cambridge Primary punya 6 stage)
+  interests String[] @default([])
+  goals     String[] @default([])
+  xp        Int      @default(0)
+  streak    Int      @default(0)
+  createdAt DateTime @default(now())
+
+  classId String?
+  class   ClassRoom? @relation(fields: [classId], references: [id])
+
+  parentId String?
+  parent   ParentProfile? @relation(fields: [parentId], references: [id])
+
+  sessions        LearningSession[]
+  attempts        Attempt[]
+  mastery         Mastery[]
+  recommendations Recommendation[]
+  achievements    Achievement[]
+  parentInsights  ParentInsight[]
+}
+
+model Teacher {
+  id     String     @id @default(cuid())
+  userId String     @unique
+  user   User       @relation(fields: [userId], references: [id])
+  name   String
+  classes ClassRoom[]
+}
+
+model ParentProfile {
+  id       String    @id @default(cuid())
+  userId   String    @unique
+  user     User      @relation(fields: [userId], references: [id])
+  name     String
+  children Student[]
+}
+
+model ClassRoom {
+  id        String    @id @default(cuid())
+  name      String // e.g. "3A"
+  teacherId String
+  teacher   Teacher   @relation(fields: [teacherId], references: [id])
+  students  Student[]
+
+  teacherInsights TeacherInsight[]
+}
+
+// --- Struktur Kurikulum Cambridge Primary (Bagian 5, 9) ---
+
+model Subject {
+  id      String    @id @default(cuid())
+  name    String    @unique // English, Mathematics, Science, Global Perspectives
+  strands Strand[]
+}
+
+model Strand {
+  id        String              @id @default(cuid())
+  subjectId String
+  subject   Subject             @relation(fields: [subjectId], references: [id])
+  name      String // e.g. "Geometry & Measure", "Reading & Communication"
+  objectives LearningObjective[]
+}
+
+model LearningObjective {
+  id          String  @id @default(cuid())
+  strandId    String
+  strand      Strand  @relation(fields: [strandId], references: [id])
+  stage       Int
+  code        String // referensi kode Cambridge (bukan menyalin isi soal)
+  description String
+  skills      Skill[]
+}
+
+model Skill {
+  id                  String            @id @default(cuid())
+  learningObjectiveId String
+  learningObjective   LearningObjective @relation(fields: [learningObjectiveId], references: [id])
+  name                String
+
+  activities      Activity[]
+  mastery         Mastery[]
+  recommendations Recommendation[]
+  teacherInsights TeacherInsight[]
+}
+
+model Activity {
+  id            String       @id @default(cuid())
+  skillId       String
+  skill         Skill        @relation(fields: [skillId], references: [id])
+  type          ActivityType
+  title         String
+  storyContext  String? // e.g. "Let's Save Water!" cross-subject theme
+  difficulty    Int // 1 (easiest) .. 5 (hardest)
+  estimatedMins Int          @default(10)
+
+  questions       Question[]
+  sessions        LearningSession[]
+  recommendations Recommendation[]
+}
+
+model Question {
+  id            String   @id @default(cuid())
+  activityId    String
+  activity      Activity @relation(fields: [activityId], references: [id])
+  prompt        String
+  difficulty    Int
+  correctAnswer String
+  metadata      Json?    // opsi jawaban, media, dsb.
+
+  attempts Attempt[]
+}
+
+// --- Learning Signals & Evidence (Bagian 8.1, 15, 18) ---
+
+model LearningSession {
+  id         String    @id @default(cuid())
+  studentId  String
+  student    Student   @relation(fields: [studentId], references: [id])
+  activityId String
+  activity   Activity  @relation(fields: [activityId], references: [id])
+  startedAt  DateTime  @default(now())
+  endedAt    DateTime?
+
+  attempts Attempt[]
+}
+
+model Attempt {
+  id              String          @id @default(cuid())
+  sessionId       String
+  session         LearningSession @relation(fields: [sessionId], references: [id])
+  questionId      String
+  question        Question        @relation(fields: [questionId], references: [id])
+  studentId       String
+  student         Student         @relation(fields: [studentId], references: [id])
+  isCorrect       Boolean
+  responseTimeMs  Int
+  attemptNumber   Int             @default(1)
+  difficulty      Int
+  createdAt       DateTime        @default(now())
+}
+
+// --- Mastery & Adaptive Engine (Bagian 8, 15, 19) ---
+
+model Mastery {
+  id            String   @id @default(cuid())
+  studentId     String
+  student       Student  @relation(fields: [studentId], references: [id])
+  skillId       String
+  skill         Skill    @relation(fields: [skillId], references: [id])
+  masteryScore  Float // 0..1
+  history       Json     @default("[]") // riwayat { score, timestamp } untuk grafik
+  updatedAt     DateTime @updatedAt
+
+  @@unique([studentId, skillId])
+}
+
+model Recommendation {
+  id         String             @id @default(cuid())
+  studentId  String
+  student    Student            @relation(fields: [studentId], references: [id])
+  skillId    String
+  skill      Skill              @relation(fields: [skillId], references: [id])
+  activityId String
+  activity   Activity           @relation(fields: [activityId], references: [id])
+  mode       RecommendationMode
+  reason     String // penjelasan evidence-led, mis. "Ready for a little more"
+  createdAt  DateTime           @default(now())
+}
+
+// --- Gamification (Bagian 20) ---
+
+model Achievement {
+  id        String          @id @default(cuid())
+  studentId String
+  student   Student         @relation(fields: [studentId], references: [id])
+  type      AchievementType
+  label     String // "6 Day Streak", "Quick Thinker"
+  value     Int             @default(0)
+  earnedAt  DateTime        @default(now())
+}
+
+// --- Insight untuk Guru & Orang Tua (Bagian 13, 14, 18) ---
+
+model TeacherInsight {
+  id              String    @id @default(cuid())
+  classId         String
+  class           ClassRoom @relation(fields: [classId], references: [id])
+  skillId         String
+  skill           Skill     @relation(fields: [skillId], references: [id])
+  summary         String // "Geometry membutuhkan reinforcement..."
+  suggestedAction String // "Assign 10-minute visual practice"
+  createdAt       DateTime  @default(now())
+}
+
+model ParentInsight {
+  id        String   @id @default(cuid())
+  studentId String
+  student   Student  @relation(fields: [studentId], references: [id])
+  summary   String
+  createdAt DateTime @default(now())
+}
